@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "ContextForge Capture",
+  "version": "0.1.0",
+  "description": "Sends the page you are reading (AI chats, docs, tickets) to your ContextForge.",
+  "host_permissions": ["http://127.0.0.1:8000/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [{
+    "matches": ["https://chatgpt.com/*", "https://claude.ai/*", "https://gemini.google.com/*", "https://github.com/*", "https://*.notion.so/*"],
+    "js": ["content.js"]
+  }]
+}

@@ -39,3 +39,22 @@ def normalize(kind: str, payload: dict) -> dict:
     doc = INGESTORS[kind](payload)
     doc["text"] = re.sub(r"[ \t]+", " ", re.sub(r"\n{2,}", "\n", doc["text"])).strip()
     return doc
+
+
+def watch(folder, cb, every=10):
+    """Automatic ingestion: poll a folder and hand new/changed text files to cb(name, path, text)."""
+    import pathlib, threading, time
+    seen = {}
+
+    def loop():
+        while True:
+            for p in pathlib.Path(folder).rglob("*"):
+                try:
+                    if p.is_file() and p.suffix.lower() in {".md", ".txt", ".json", ".py", ".log"} and seen.get(p) != p.stat().st_mtime:
+                        seen[p] = p.stat().st_mtime
+                        cb(p.name, str(p), p.read_text(errors="ignore"))
+                except Exception as e:
+                    print("watch error:", e)
+            time.sleep(every)
+
+    threading.Thread(target=loop, daemon=True).start()

@@ -1,4 +1,5 @@
-.venv
-contextforge.db
-uv.lock
-frontend/node_modules
+contextforge/backend/.venv
+contextforge/frontend/package-lock.json
+contextforge/backend/uv.lock
+contextforge/frontend/node_modules
+contextforge/backend/contextforge2.db
