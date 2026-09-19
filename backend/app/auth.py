@@ -54,3 +54,59 @@ def require_admin(c=Depends(current)):
     if c["role"] != "admin":
         raise HTTPException(403, "Admin role required")
     return c
+
+
+def is_visible(fact_tags: list[str] | set[str] | str | None, allowed: list[str] | set[str] | None) -> bool:
+    """Single global RBAC visibility function with explicit, strict semantics.
+
+    Semantics:
+    1. Super-admin wildcard ('*'): If '*' in allowed, always returns True.
+    2. Empty / Public fact tags: If fact has no tags or empty tags (or only default 'general'),
+       it is public to all authenticated users -> returns True.
+    3. Restricted tags: All domain-restricted tags associated with the fact (excluding default 'general')
+       must be present in the caller's allowed tags (i.e. domain_tags.issubset(set(allowed))).
+       A fact with tags ['frontend', 'secret'] requires the caller to hold BOTH 'frontend' AND 'secret' permissions.
+    """
+    if allowed is None:
+        return False
+    if "*" in allowed:
+        return True
+    if fact_tags is None:
+        return True
+    if isinstance(fact_tags, str):
+        try:
+            tags_set = set(json.loads(fact_tags))
+        except Exception:
+            tags_set = {fact_tags} if fact_tags.strip() else set()
+    elif isinstance(fact_tags, (list, set, tuple)):
+        tags_set = set(fact_tags)
+    else:
+        tags_set = set()
+
+    # Domain tags require explicit clearance (excluding fallback 'general' tag)
+    domain_tags = tags_set - {"general"}
+    if not domain_tags:
+        return True
+    return domain_tags.issubset(set(allowed))
+
+
+def can_access_project(user: str, role: str, project: dict | None) -> bool:
+    """Check if user/role has permission to access the specified project."""
+    if not project:
+        return False
+    if role == "admin":
+        return True
+    if project.get("created_by") == user:
+        return True
+    members_raw = project.get("members", '["*"]')
+    if isinstance(members_raw, str):
+        try:
+            members = json.loads(members_raw)
+        except Exception:
+            members = [members_raw]
+    else:
+        members = list(members_raw or [])
+    if "*" in members or user in members or role in members:
+        return True
+    return False
+

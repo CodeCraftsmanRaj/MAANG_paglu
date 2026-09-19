@@ -28,6 +28,13 @@ class Fact:
     action: str | None = None
     owner: str | None = None
     depends_on: str | None = None
+    key: str | None = None
+    condition: str | None = None
+    outcome: str | None = None
+    superseded_by: int | None = None
+    valid_from: float | None = None
+    valid_to: float | None = None
+    priority: int = 0
 
 
 class Ingestor(ABC):
@@ -40,7 +47,7 @@ class Ingestor(ABC):
 
 
 class LLMProvider(ABC):
-    """Abstract interface for LLM operations (extraction, inference, Q&A, vision)."""
+    """Abstract interface for LLM operations (extraction, inference, Q&A, vision, classification)."""
 
     @abstractmethod
     def enabled(self) -> bool:
@@ -48,8 +55,13 @@ class LLMProvider(ABC):
         ...
 
     @abstractmethod
-    def extract_facts(self, text: str, is_process: bool = False) -> list[Fact]:
-        """Extract atomic facts, tags, and entity relation triples from text."""
+    def classify_structure_mode(self, project_name: str, sample_text: str = "") -> dict[str, str]:
+        """Classify project structure mode ('graph','allowlist','denylist','keyword','keyvalue','ruleset','versioned','rag')."""
+        ...
+
+    @abstractmethod
+    def extract_facts(self, text: str, is_process: bool = False, structure_mode: str = "rag") -> list[Fact]:
+        """Extract atomic facts, tags, and structure-mode specific fields from text."""
         ...
 
     @abstractmethod
@@ -58,8 +70,8 @@ class LLMProvider(ABC):
         ...
 
     @abstractmethod
-    def answer(self, query: str, context: list[dict[str, Any]], is_process: bool = False) -> str:
-        """Answer a query using only provided context with citations."""
+    def answer(self, query: str, context: list[dict[str, Any]], is_process: bool = False, structure_mode: str = "rag") -> str:
+        """Answer a query using only provided context formatted specifically for the active structure mode."""
         ...
 
     @abstractmethod
@@ -70,19 +82,43 @@ class LLMProvider(ABC):
 
 class EmbeddingProvider(ABC):
     """Abstract interface for vector embedding generation."""
+    model_name: str = "unknown"
+    dimension: int = 384
 
     @abstractmethod
     def embed(self, texts: list[str]) -> list[Any]:
         """Generates normalized vector embeddings for a list of texts."""
         ...
 
+    def embed_documents(self, texts: list[str]) -> list[Any]:
+        """Generates normalized vector embeddings for document/fact storage (RETRIEVAL_DOCUMENT)."""
+        return self.embed(texts)
+
+    def embed_query(self, text: str) -> Any:
+        """Generates normalized vector embedding for a search query (RETRIEVAL_QUERY)."""
+        return self.embed([text])[0]
+
+
 
 class FactRepository(ABC):
     """Persistence interface for projects, sources, facts, vector embeddings, and graph relations."""
 
     @abstractmethod
-    def create_project(self, name: str, created_by: str, project_type: str = "general") -> dict[str, Any]:
+    def create_project(
+        self,
+        name: str,
+        created_by: str,
+        project_type: str = "general",
+        structure_mode: str = "rag",
+        classification_reason: str | None = None,
+        members: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Create a new project."""
+        ...
+
+    @abstractmethod
+    def update_project_mode(self, project_id: str, structure_mode: str, reason: str | None = None) -> dict[str, Any] | None:
+        """Update structure mode and reasoning for project."""
         ...
 
     @abstractmethod
@@ -126,8 +162,20 @@ class FactRepository(ABC):
         action: str | None = None,
         owner: str | None = None,
         depends_on: str | None = None,
+        key: str | None = None,
+        condition: str | None = None,
+        outcome: str | None = None,
+        superseded_by: int | None = None,
+        valid_from: float | None = None,
+        valid_to: float | None = None,
+        priority: int = 0,
     ) -> int | None:
         """Insert fact with provenance. Returns fact_id or None if duplicate."""
+        ...
+
+    @abstractmethod
+    def supersede_fact(self, old_fact_id: int, new_fact_id: int) -> None:
+        """Mark old fact as superseded by new fact."""
         ...
 
     @abstractmethod
@@ -136,14 +184,30 @@ class FactRepository(ABC):
         ...
 
     @abstractmethod
-    def put_vector(self, fact_id: int, vector_bytes: bytes) -> None:
-        """Save vector blob for fact."""
+    def put_rejected_fact(self, text: str, reason: str, tags: list[str], source_id: str) -> int:
+        """Save rejected guardrail item."""
         ...
 
     @abstractmethod
-    def get_all_vectors(self) -> dict[int, Any]:
-        """Return mapping of fact_id to numpy vector array."""
+    def get_rejected_facts(self, project_id: str | None = None) -> list[dict[str, Any]]:
+        """Fetch all rejected guardrail facts for project."""
         ...
+
+    @abstractmethod
+    def get_fact_history(self, fact_id_or_key: str | int, project_id: str | None = None) -> list[dict[str, Any]]:
+        """Fetch version history chain for a fact or canonical key."""
+        ...
+
+    @abstractmethod
+    def put_vector(self, fact_id: int, vector_bytes: bytes, model_name: str | None = None, dim: int | None = None) -> None:
+        """Save vector blob with model_name and dimension for fact."""
+        ...
+
+    @abstractmethod
+    def get_all_vectors(self, model_name: str | None = None, dim: int | None = None) -> dict[int, Any]:
+        """Return mapping of fact_id to numpy vector array matching model and dim if provided."""
+        ...
+
 
     @abstractmethod
     def put_edges(self, fact_id: int, rels: list[list[str]]) -> None:
@@ -154,4 +218,5 @@ class FactRepository(ABC):
     def get_all_edges(self) -> list[dict[str, Any]]:
         """Fetch all graph edges."""
         ...
+
 

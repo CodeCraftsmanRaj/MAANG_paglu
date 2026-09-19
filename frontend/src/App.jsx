@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import call, { store } from "./api";
+import { formatProvenance, formatRecordedDate } from "./provenance";
+
 
 const csv = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
@@ -87,6 +89,7 @@ function ProjectSwitcher({ projects, currentProject, onSelect, onOpenNewModal })
 
   const pName = currentProject?.name || "Untitled project";
   const pType = currentProject?.project_type || "general";
+  const pMode = currentProject?.structure_mode || "rag";
 
   return (
     <div className="project-switcher-wrap" ref={ref}>
@@ -99,7 +102,10 @@ function ProjectSwitcher({ projects, currentProject, onSelect, onOpenNewModal })
       >
         <div className="project-trigger-content">
           <span className="project-trigger-name" title={pName}>{pName}</span>
-          <span className={`project-badge ${pType}`}>[{pType}]</span>
+          <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+            <span className={`project-badge ${pMode}`} title={`Structure Mode: ${pMode}`}>[{pMode}]</span>
+            {pType === "process" && <span className="project-badge process">[process]</span>}
+          </div>
         </div>
         <span className="mono" style={{ fontSize: "10px", color: "var(--ink-muted)" }}>{open ? "▲" : "▼"}</span>
       </button>
@@ -109,6 +115,7 @@ function ProjectSwitcher({ projects, currentProject, onSelect, onOpenNewModal })
           <div className="project-dropdown-list">
             {projects.map((p) => {
               const isSel = p.id === currentProject?.id;
+              const mode = p.structure_mode || "rag";
               return (
                 <div
                   key={p.id}
@@ -117,10 +124,11 @@ function ProjectSwitcher({ projects, currentProject, onSelect, onOpenNewModal })
                     onSelect(p);
                     setOpen(false);
                   }}
+                  title={p.classification_reason || `Project mode: ${mode}`}
                 >
                   <div className="project-option-left">
                     <span className="project-option-name" title={p.name}>{p.name}</span>
-                    <span className={`project-badge ${p.project_type}`}>[{p.project_type}]</span>
+                    <span className={`project-badge ${mode}`}>[{mode}]</span>
                   </div>
                   {isSel && <span className="mono" style={{ color: "var(--accent-stamp)", fontSize: "11px" }}>✓</span>}
                 </div>
@@ -145,10 +153,12 @@ function ProjectSwitcher({ projects, currentProject, onSelect, onOpenNewModal })
   );
 }
 
-// Modal for creating new General / Process project
+// Modal for creating new Project with LLM classification or manual mode
 function NewProjectModal({ isOpen, onClose, onCreate }) {
   const [name, setName] = useState("");
   const [type, setType] = useState("general");
+  const [mode, setMode] = useState("auto");
+  const [sampleText, setSampleText] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -164,9 +174,11 @@ function NewProjectModal({ isOpen, onClose, onCreate }) {
     setBusy(true);
     setErr("");
     try {
-      await onCreate(clean, type);
+      await onCreate(clean, type, mode === "auto" ? null : mode, sampleText.trim());
       setName("");
       setType("general");
+      setMode("auto");
+      setSampleText("");
       onClose();
     } catch (x) {
       setErr(x.message);
@@ -178,9 +190,9 @@ function NewProjectModal({ isOpen, onClose, onCreate }) {
   return (
     <div className="project-modal-backdrop" onClick={onClose}>
       <div className="project-modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Create new project</h3>
+        <h3>Create new project workspace</h3>
         <p className="sub" style={{ margin: "2px 0 14px" }}>
-          Scope documents, facts, and execution checklists to a distinct organizational workspace.
+          Scope documents, facts, and retrieval paradigms to a dedicated knowledge domain.
         </p>
 
         <form onSubmit={submit}>
@@ -189,7 +201,7 @@ function NewProjectModal({ isOpen, onClose, onCreate }) {
               Project Name:
             </span>
             <input
-              placeholder="e.g. Payment Gateway or Release Ops"
+              placeholder="e.g. Refund Policy, Cloud Infra Config, or Release Ops"
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoFocus
@@ -197,8 +209,21 @@ function NewProjectModal({ isOpen, onClose, onCreate }) {
             />
           </div>
 
+          <div style={{ marginBottom: "12px" }}>
+            <span className="mono" style={{ fontSize: "11px", color: "var(--ink-muted)", display: "block", marginBottom: "4px" }}>
+              Sample Content / Purpose (for AI classification):
+            </span>
+            <textarea
+              placeholder="Describe what kind of knowledge this project holds (e.g. 'If refund > 500 then approve...')"
+              value={sampleText}
+              onChange={(e) => setSampleText(e.target.value)}
+              rows={2}
+              style={{ margin: 0, width: "100%", fontFamily: "var(--font-sans)", fontSize: "12.5px" }}
+            />
+          </div>
+
           <span className="mono" style={{ fontSize: "11px", color: "var(--ink-muted)", display: "block", marginBottom: "6px" }}>
-            Project Type:
+            Execution Type:
           </span>
           <div className="project-type-choice-group">
             <div
@@ -223,9 +248,31 @@ function NewProjectModal({ isOpen, onClose, onCreate }) {
                 <span className="project-badge process">[process]</span>
               </div>
               <div className="project-type-card-desc">
-                Procedural workflows with Action, Owner, and Dependency structuring & execution checklists.
+                Procedural workflows with Action, Owner, and Dependency runbook checklists.
               </div>
             </div>
+          </div>
+
+          <div style={{ marginBottom: "16px" }}>
+            <span className="mono" style={{ fontSize: "11px", color: "var(--ink-muted)", display: "block", marginBottom: "4px" }}>
+              Retrieval Paradigm:
+            </span>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value)}
+              className="mode-override-select"
+              style={{ width: "100%", padding: "6px 8px" }}
+            >
+              <option value="auto">✨ Auto-classify dynamically via AI (Recommended)</option>
+              <option value="rag">RAG — Open-ended hybrid multi-index synthesis</option>
+              <option value="ruleset">Ruleset — Conditional logic (if/then branches, policy thresholds)</option>
+              <option value="keyvalue">Key-Value — Direct configuration lookup & parameters</option>
+              <option value="denylist">Denylist — Anti-patterns, rejected tools & guardrails</option>
+              <option value="versioned">Versioned — Temporal evolution, pricing tiers & history</option>
+              <option value="graph">Graph — Sequential dependencies & execution checklists</option>
+              <option value="allowlist">Allowlist — Strict tag membership, zero fuzzy matching</option>
+              <option value="keyword">Keyword — Literal error codes, configs & path lookups</option>
+            </select>
           </div>
 
           {err && <p className="err" style={{ marginBottom: "12px" }}>{err}</p>}
@@ -233,7 +280,7 @@ function NewProjectModal({ isOpen, onClose, onCreate }) {
           <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
             <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
             <button type="submit" className="primary" disabled={busy}>
-              {busy ? "Creating..." : "Create project"}
+              {busy ? "Creating & Classifying..." : "Create project"}
             </button>
           </div>
         </form>
@@ -482,13 +529,80 @@ function Login({ onDone }) {
   );
 }
 
-function FactCard({ fact }) {
-  const [showSource, setShowSource] = useState(false);
-  const [sourceData, setSourceData] = useState(null);
+function HistoryModal({ factId, isOpen, onClose }) {
+  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (isOpen && factId) {
+      setLoading(true);
+      call(`/facts/${factId}/history`)
+        .then((data) => setHistory(data))
+        .catch(() => setHistory([]))
+        .finally(() => setLoading(false));
+    }
+  }, [isOpen, factId]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="project-modal-backdrop" onClick={onClose}>
+      <div className="project-modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Fact Evolution & Version History</h3>
+        <p className="sub" style={{ margin: "2px 0 14px" }}>
+          Chronological chain of superseded and active versions for this record.
+        </p>
+        {loading ? (
+          <p className="mono">Loading history chain...</p>
+        ) : history.length === 0 ? (
+          <p className="sub">No prior versions found for this fact.</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            {history.map((h, idx) => (
+              <div
+                key={h.id}
+                style={{
+                  border: "1px solid var(--rule)",
+                  borderLeft: h.superseded_by ? "3px solid var(--ink-muted)" : "3px solid var(--accent-stamp)",
+                  padding: "8px 10px",
+                  background: h.superseded_by ? "var(--bg-canvas)" : "var(--bg-panel)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                  <span className="mono" style={{ fontSize: "11px", color: "var(--ink-muted)" }}>
+                    Version {idx + 1} (Fact #{h.id})
+                  </span>
+                  <span className={`project-badge ${h.superseded_by ? "rag" : "versioned"}`}>
+                    {h.superseded_by ? `superseded by #${h.superseded_by}` : "active (current)"}
+                  </span>
+                </div>
+                <div style={{ fontSize: "13px" }}>{h.text}</div>
+                {h.created && (
+                  <div className="mono" style={{ fontSize: "11px", color: "var(--ink-muted)", marginTop: "4px" }}>
+                    Recorded: {formatRecordedDate(null, h.created)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "16px" }}>
+          <button type="button" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FactCard({ fact, currentProject }) {
+  const [showSource, setShowSource] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [sourceData, setSourceData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
   const toggleSource = async () => {
-    if (!showSource && !sourceData) {
+    if (!showSource && !sourceData && fact.source?.id) {
       setLoading(true);
       try {
         const s = await call(`/sources/${fact.source.id}`);
@@ -502,10 +616,91 @@ function FactCard({ fact }) {
   };
 
   const hasProcessMeta = Boolean(fact.action || fact.owner || fact.depends_on);
+  const hasRuleMeta = Boolean(fact.condition || fact.outcome);
+  const hasKeyMeta = Boolean(fact.key);
+  const isSuperseded = fact.superseded_by !== null && fact.superseded_by !== undefined;
+
+  const rawSentence = formatProvenance(fact.source, currentProject);
+  const domain = fact.source?.source_domain;
+  const uri = fact.source?.uri;
+
+  // Render sentence with clickable domain link if uri and domain are present
+  const renderProvenanceSentence = () => {
+    if (domain && uri && rawSentence.includes(domain)) {
+      const parts = rawSentence.split(domain);
+      return (
+        <span
+          className="provenance-sentence"
+          onClick={toggleSource}
+          role="button"
+          tabIndex={0}
+          title="Click to inspect source details"
+        >
+          {parts[0]}
+          <a
+            href={uri}
+            target="_blank"
+            rel="noreferrer"
+            className="provenance-domain-link"
+            onClick={(e) => e.stopPropagation()}
+            title={`Open ${uri}`}
+          >
+            {domain}
+          </a>
+          {parts.slice(1).join(domain)}
+        </span>
+      );
+    }
+
+    return (
+      <span
+        className="provenance-sentence"
+        onClick={toggleSource}
+        role="button"
+        tabIndex={0}
+        title="Click to inspect source details"
+      >
+        {rawSentence}
+      </span>
+    );
+  };
 
   return (
     <article className="fact">
       <p>{fact.text}</p>
+
+      {/* Ruleset mode structured conditional block */}
+      {hasRuleMeta && (
+        <div className="fact-rule-block mono">
+          {fact.condition && (
+            <span>
+              <b style={{ color: "#5D3B8E" }}>Condition:</b> {fact.condition}
+            </span>
+          )}
+          {fact.condition && fact.outcome && <span className="process-sep">→</span>}
+          {fact.outcome && (
+            <span>
+              <b style={{ color: "#5D3B8E" }}>Outcome:</b> {fact.outcome}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Key-Value mode canonical key block */}
+      {hasKeyMeta && (
+        <div className="fact-kv-block mono">
+          <b style={{ color: "#2B547E" }}>Canonical Key:</b> <code>{fact.key}</code>
+        </div>
+      )}
+
+      {/* Versioned mode supersession indicator */}
+      {isSuperseded && (
+        <div className="fact-version-block mono">
+          <span>⚠️ <b>Superseded:</b> Replaced by newer Fact #{fact.superseded_by}</span>
+        </div>
+      )}
+
+      {/* Graph / Process operational block */}
       {hasProcessMeta && (
         <div className="fact-process-block mono">
           {fact.action && (
@@ -527,32 +722,98 @@ function FactCard({ fact }) {
           )}
         </div>
       )}
-      <small>
-        {fact.tags.map((t) => <span key={t} className="tag">{t}</span>)}
-        {fact.via.map((v) => <span key={v} className="tag alt">{v}</span>)}
-        <span>
-          from {fact.source.uri?.startsWith("http")
-            ? <a href={fact.source.uri} target="_blank" rel="noreferrer">{fact.source.title}</a>
-            : fact.source.title}
-        </span>
-        <button type="button" className="btn-source" onClick={toggleSource}>
-          {loading ? "loading..." : showSource ? "[hide source details]" : "[inspect source record]"}
-        </button>
-      </small>
+
+      <div className="fact-footer">
+        <div className="fact-tags-row">
+          {fact.tags.map((t) => <span key={t} className="tag">{t}</span>)}
+          {fact.via.map((v) => <span key={v} className="tag alt">{v}</span>)}
+        </div>
+
+        <div className="fact-provenance-row">
+          {renderProvenanceSentence()}
+
+          <div className="fact-provenance-actions">
+            <button type="button" className="btn-source-action" onClick={toggleSource}>
+              {loading ? "loading..." : showSource ? "Hide source" : "Show source"}
+            </button>
+            {(fact.key || isSuperseded) && (
+              <button type="button" className="btn-source-action" onClick={() => setShowHistory(true)}>
+                History chain
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       {showSource && (
-        <div className="source-details">
-          <b>source id:</b> <span>{fact.source.id}</span>
-          <b>kind:</b> <span>{sourceData?.kind || "unknown"}</span>
-          <b>title:</b> <span>{sourceData?.title || fact.source.title}</span>
-          {sourceData?.uri && <><b>uri:</b> <span>{sourceData.uri}</span></>}
-          <b>mode:</b> <span>{sourceData?.mode || "static"}</span>
-          {sourceData?.project_id && <><b>project:</b> <span>{sourceData.project_id}</span></>}
-          {sourceData?.created && <><b>recorded:</b> <span>{new Date(Number(sourceData.created) * 1000).toISOString().replace("T", " ").substring(0, 19)} UTC</span></>}
+        <div className="source-detail-card">
+          <div className="source-detail-grid">
+            <div className="source-detail-row">
+              <span className="source-detail-label">Source</span>
+              <div className="source-detail-val">
+                {sourceData?.uri ? (
+                  <a
+                    href={sourceData.uri}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="source-uri-link"
+                  >
+                    {sourceData.title || sourceData.uri} ↗
+                  </a>
+                ) : (
+                  <span>{sourceData?.title || fact.source?.title || "Pasted note"}</span>
+                )}
+                {sourceData?.mode && sourceData.mode !== "static" && (
+                  <span className="source-mode-pill">({sourceData.mode})</span>
+                )}
+              </div>
+            </div>
+
+            <div className="source-detail-row">
+              <span className="source-detail-label">Added</span>
+              <div className="source-detail-val">
+                {formatRecordedDate(sourceData?.recorded_at, sourceData?.created) || "Timestamp unavailable"}
+              </div>
+            </div>
+
+            <div className="source-detail-row">
+              <span className="source-detail-label">Project</span>
+              <div className="source-detail-val">
+                <span>{sourceData?.project_name || fact.source?.project_name || "Default Workspace"}</span>
+              </div>
+            </div>
+
+            <div className="source-detail-row">
+              <span className="source-detail-label">Reference</span>
+              <div className="source-detail-val ref-cell">
+                <code className="source-ref-code">{sourceData?.id || fact.source?.id}</code>
+                <button
+                  type="button"
+                  className="btn-copy-ref"
+                  onClick={() => {
+                    navigator.clipboard.writeText(sourceData?.id || fact.source?.id || "");
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                  title="Copy raw reference ID for tracing"
+                >
+                  {copied ? "✓ Copied" : "Copy reference"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
+
+      <HistoryModal
+        factId={fact.id}
+        isOpen={showHistory}
+        onClose={() => setShowHistory(false)}
+      />
     </article>
   );
 }
+
 
 function ScreenWatch({ log, currentProject, disabled = false }) {
   const [on, setOn] = useState(false);
@@ -615,6 +876,9 @@ function Capture({ log, logs, tagsData, currentProject, disabled = false }) {
       const payload = { ...p, tags: manualTags, project_id: currentProject?.id || "proj_default" };
       const r = await call("/ingest", "POST", payload);
       log(`Learned ${r.facts} atomic facts for project '${currentProject?.name || "Untitled"}' from ${p.title || p.url || "pasted note"}`);
+      if (r.warnings && r.warnings.length > 0) {
+        r.warnings.forEach((w) => log(w.warning || w, true));
+      }
     } catch (e) { log(e.message, true); }
     setBusy(false);
   };
@@ -634,18 +898,27 @@ function Capture({ log, logs, tagsData, currentProject, disabled = false }) {
 
   const pName = currentProject?.name || "Untitled project";
   const pType = currentProject?.project_type || "general";
+  const pMode = currentProject?.structure_mode || "rag";
 
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
         <h2>Ingest & capture</h2>
-        <span className={`project-badge ${pType}`} style={{ fontSize: "11px", padding: "2px 6px" }}>
-          scoped to: {pName} [{pType}]
-        </span>
+        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+          <span className={`project-badge ${pMode}`}>[{pMode}]</span>
+          <span className={`project-badge ${pType}`} style={{ fontSize: "11px", padding: "2px 6px" }}>
+            scoped to: {pName}
+          </span>
+        </div>
       </div>
       <p className="sub">
-        Normalize unstructured documentation, web pages, and developer notes into atomic structured records
-        {pType === "process" ? " (with automatic procedural action/owner/prerequisite structuring)." : "."}
+        Normalize unstructured documentation, configs, and notes into atomic structured facts
+        {pMode === "ruleset" ? " (conditional rules & outcomes)"
+          : pMode === "keyvalue" ? " (canonical key-value configs)"
+          : pMode === "denylist" ? " (anti-pattern guardrails)"
+          : pMode === "versioned" ? " (temporal version evolution)"
+          : pMode === "graph" || pType === "process" ? " (procedural action/owner/prerequisite checklists)"
+          : " (hybrid multi-index graph/vector/flat)."}
       </p>
 
       {disabled && (
@@ -661,7 +934,15 @@ function Capture({ log, logs, tagsData, currentProject, disabled = false }) {
         <textarea
           rows={5}
           disabled={disabled}
-          placeholder={pType === "process"
+          placeholder={pMode === "ruleset"
+            ? "e.g. If refund_amount > 500 then Requires VP approval. If account_age < 30_days then Reject refund..."
+            : pMode === "keyvalue"
+            ? "e.g. DATABASE_PORT: 5432\nREDIS_HOST: redis.internal.net\nMAX_WORKERS: 8..."
+            : pMode === "denylist"
+            ? "e.g. Do not use MongoDB for billing transactions due to lack of multi-table ACID isolation..."
+            : pMode === "versioned"
+            ? "e.g. pro_tier_price: $49/mo in 2025 (updated from $29/mo)..."
+            : pType === "process" || pMode === "graph"
             ? "e.g. DevOps engineer deploys database migrations after QA lead approves release..."
             : "https://docs.company.internal/deploy  or drop notes here..."}
           value={text}
@@ -725,10 +1006,11 @@ function Capture({ log, logs, tagsData, currentProject, disabled = false }) {
   );
 }
 
-function Find({ tags, role, allowed, llmOn, currentProject }) {
+function Find({ tags, role, allowed, llmOn, currentProject, onUpdateProjectMode }) {
   const [mode, setMode] = useState("dynamic");
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState([]);
+  const [includeHistory, setIncludeHistory] = useState(false);
   const [res, setRes] = useState(null);
   const [answer, setAnswer] = useState("");
   const [isExecutionPlan, setIsExecutionPlan] = useState(false);
@@ -738,6 +1020,7 @@ function Find({ tags, role, allowed, llmOn, currentProject }) {
   const isProcessProject = currentProject?.project_type === "process";
   const pName = currentProject?.name || "Untitled project";
   const pType = currentProject?.project_type || "general";
+  const pMode = currentProject?.structure_mode || "rag";
 
   const getBody = (isProcessFlag = false) => ({
     query,
@@ -745,6 +1028,7 @@ function Find({ tags, role, allowed, llmOn, currentProject }) {
     scope: mode === "explicit" ? scope : [],
     project_id: currentProject?.id || "proj_default",
     is_process: isProcessFlag,
+    include_history: includeHistory,
   });
 
   const guard = (fn) => async () => { try { await fn(); } catch (e) { setRes({ error: e.message, facts: [] }); } };
@@ -789,17 +1073,59 @@ function Find({ tags, role, allowed, llmOn, currentProject }) {
 
   return (
     <>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px", flexWrap: "wrap", gap: "8px" }}>
         <h2>Find & query</h2>
-        <span className={`project-badge ${pType}`} style={{ fontSize: "11px", padding: "2px 6px" }}>
-          scoped to: {pName} [{pType}]
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          {/* Manual Mode Override Dropdown */}
+          <div className="mode-override-wrap">
+            <span className="mono" style={{ fontSize: "11px", color: "var(--ink-muted)" }}>Mode:</span>
+            <select
+              value={pMode}
+              onChange={(e) => onUpdateProjectMode && onUpdateProjectMode(e.target.value)}
+              className="mode-override-select"
+              title="Change project retrieval mode override"
+            >
+              <option value="rag">RAG (Hybrid multi-index)</option>
+              <option value="ruleset">Ruleset (Conditional logic)</option>
+              <option value="keyvalue">Key-Value (Config parameters)</option>
+              <option value="denylist">Denylist (Anti-patterns & guardrails)</option>
+              <option value="versioned">Versioned (Temporal pricing/spec)</option>
+              <option value="graph">Graph (Sequential runbooks)</option>
+              <option value="allowlist">Allowlist (Strict tag scope)</option>
+              <option value="keyword">Keyword (Literal error & paths)</option>
+            </select>
+          </div>
+
+          {currentProject?.classification_reason && (
+            <span className="mode-reason-tooltip" title={`Classification: ${currentProject.classification_reason}`}>
+              ℹ️ {currentProject.classification_reason.length > 28 ? currentProject.classification_reason.substring(0, 26) + "..." : currentProject.classification_reason}
+            </span>
+          )}
+
+          <span className={`project-badge ${pType}`} style={{ fontSize: "11px", padding: "2px 6px" }}>
+            {pName}
+          </span>
+        </div>
       </div>
-      <p className="sub">Searching records under security boundary <b>{role}</b> in project <b>{pName}</b>.</p>
+      <p className="sub">
+        Searching records under security boundary <b>{role}</b> in project <b>{pName}</b> (operating in <b>{pMode}</b> mode).
+      </p>
 
       {hasNoScope && (
         <div className="banner warning">
           <span className="mono">access boundary:</span> Your account has no assigned scope yet — ask an admin to assign you a role in Team.
+        </div>
+      )}
+
+      {/* Guardrail Violation Warnings if returned */}
+      {res?.warnings && res.warnings.length > 0 && (
+        <div className="guardrail-alert-box">
+          <div className="guardrail-alert-title">
+            <span>⚠️ Guardrail Violation Warning</span>
+          </div>
+          {res.warnings.map((w, idx) => (
+            <div key={idx} style={{ marginTop: "2px" }}>{w.warning || w}</div>
+          ))}
         </div>
       )}
 
@@ -852,7 +1178,15 @@ function Find({ tags, role, allowed, llmOn, currentProject }) {
 
         <input
           placeholder={
-            isProcessProject
+            pMode === "ruleset"
+              ? "Ask a policy/rule question (e.g. What happens if refund_amount > 500?)"
+              : pMode === "keyvalue"
+              ? "Enter canonical key to lookup (e.g. DATABASE_PORT or REDIS_HOST)"
+              : pMode === "denylist"
+              ? "Check a proposed approach for guardrails (e.g. Can we use MongoDB for billing?)"
+              : pMode === "versioned"
+              ? "Query pricing tier or spec (e.g. pro_tier_price)"
+              : isProcessProject || pMode === "graph"
               ? "Ask how to execute a process (e.g. How do we deploy database migrations?)"
               : mode === "dynamic"
               ? "Ask a question (e.g. How is deployment configured for payments?)"
@@ -860,17 +1194,49 @@ function Find({ tags, role, allowed, llmOn, currentProject }) {
           }
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && (isProcessProject ? askAndExecute() : search())}
+          onKeyDown={(e) => e.key === "Enter" && (isProcessProject || pMode === "graph" ? askAndExecute() : pMode === "keyvalue" || pMode === "ruleset" ? ask() : search())}
         />
 
+        {/* Versioned Mode History Toggle */}
+        {pMode === "versioned" && (
+          <div style={{ margin: "4px 0 8px" }}>
+            <label className="mono" style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "11.5px", cursor: "pointer", color: "var(--ink-muted)" }}>
+              <input
+                type="checkbox"
+                checked={includeHistory}
+                onChange={(e) => setIncludeHistory(e.target.checked)}
+              />
+              <span>Include prior superseded version history</span>
+            </label>
+          </div>
+        )}
+
+        {/* Mode-Adaptive Action Buttons */}
         <div className="row" style={{ marginTop: "4px", gap: "8px", flexWrap: "wrap" }}>
           <button className="primary" onClick={search}>Search index</button>
-          {llmOn && <button onClick={ask}>Synthesize answer & cite</button>}
-          {llmOn && isProcessProject && (
+
+          {pMode === "ruleset" && (
+            <button type="button" className="btn-execute" onClick={ask} title="Evaluate conditional rule branches">
+              ⚖️ Evaluate ruleset
+            </button>
+          )}
+
+          {pMode === "keyvalue" && (
+            <button type="button" className="btn-execute" onClick={ask} title="Direct canonical key lookup">
+              🔑 Lookup key value
+            </button>
+          )}
+
+          {llmOn && pMode !== "ruleset" && pMode !== "keyvalue" && (
+            <button onClick={ask}>Synthesize answer & cite</button>
+          )}
+
+          {(isProcessProject || pMode === "graph") && (
             <button type="button" className="btn-execute" onClick={askAndExecute} title="Generate ordered step-by-step checklist runbook">
               ⚡ Ask & execute (runbook)
             </button>
           )}
+
           <button onClick={pack}>Generate context pack</button>
         </div>
       </div>
@@ -880,6 +1246,12 @@ function Find({ tags, role, allowed, llmOn, currentProject }) {
         <div className={`card answer ${isExecutionPlan ? "execution-plan" : ""}`}>
           {isExecutionPlan && (
             <h4>⚡ Operational Execution Checklist (Runbook)</h4>
+          )}
+          {pMode === "ruleset" && (
+            <h4 style={{ color: "#5D3B8E", marginBottom: "6px" }}>⚖️ Policy Ruleset Decision</h4>
+          )}
+          {pMode === "denylist" && (
+            <h4 style={{ color: "var(--accent-flag)", marginBottom: "6px" }}>⚠️ Architectural Guardrail Evaluation</h4>
           )}
           <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{answer}</div>
         </div>
@@ -900,7 +1272,8 @@ function Find({ tags, role, allowed, llmOn, currentProject }) {
       {/* Facts results list */}
       {res?.facts && (res.facts.length === 0 && !res.error
         ? <p className="sub">No facts visible to role <b>{role}</b> matched the current query in project <b>{pName}</b>.</p>
-        : res.facts.map((f) => <FactCard key={f.id} fact={f} />))}
+        : res.facts.map((f) => <FactCard key={f.id} fact={f} currentProject={currentProject} />))}
+
 
       {/* Context pack export */}
       {md && (
@@ -1114,11 +1487,29 @@ export default function App() {
     localStorage.setItem("cf_project_id", proj.id);
   };
 
-  const handleCreateProject = async (name, project_type) => {
-    const created = await call("/projects", "POST", { name, project_type });
+  const handleCreateProject = async (name, project_type, structure_mode, sample_text) => {
+    const payload = { name, project_type };
+    if (structure_mode) payload.structure_mode = structure_mode;
+    if (sample_text) payload.sample_text = sample_text;
+    const created = await call("/projects", "POST", payload);
     await loadProjects();
     handleSelectProject(created);
-    log(`Created project '${created.name}' [${created.project_type}]`);
+    log(`Created project '${created.name}' [mode: ${created.structure_mode || "rag"}]`);
+  };
+
+  const handleUpdateProjectMode = async (newMode) => {
+    if (!currentProject) return;
+    try {
+      const updated = await call(`/projects/${currentProject.id}/mode`, "PUT", {
+        structure_mode: newMode,
+        classification_reason: "Manual override by user",
+      });
+      setCurrentProject(updated);
+      setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      log(`Switched project '${updated.name}' to [${updated.structure_mode}] mode`);
+    } catch (e) {
+      log(`Failed to update mode: ${e.message}`, true);
+    }
   };
 
   const boot = async () => {
@@ -1246,12 +1637,13 @@ export default function App() {
         )}
         {tab === "find" && (
           <Find
-            key={(view || me.role) + "_" + (currentProject?.id || "")}
+            key={(view || me.role) + "_" + (currentProject?.id || "") + "_" + (currentProject?.structure_mode || "")}
             tags={tagsData}
             role={view || me.role}
             allowed={me.allowed}
             llmOn={me.llm}
             currentProject={currentProject}
+            onUpdateProjectMode={handleUpdateProjectMode}
           />
         )}
         {tab === "team" && admin && (

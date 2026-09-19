@@ -1,9 +1,15 @@
 # Environments & Secrets
 .env
+.env*
+.env.*
+**/.env
+**/.env*
+**/.env.*
+*.env*
 *.env.secret
-!backend/.env.example
-!backend/.env.local
-!backend/.env.production
+!**/.env.example
+!**/.env*.example
+!**/*.env.example
 
 # Python & Virtual Environments
 __pycache__/

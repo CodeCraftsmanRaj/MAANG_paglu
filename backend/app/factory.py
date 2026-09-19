@@ -6,10 +6,11 @@ from .interfaces import EmbeddingProvider, FactRepository, Ingestor, LLMProvider
 from .providers.embeddings import (
     BedrockEmbeddingProvider,
     FastEmbedProvider,
+    GeminiEmbeddingProvider,
     HashedEmbeddingProvider,
 )
 from .providers.ingestors import TextIngestor, URLIngestor
-from .providers.llm import BedrockLLMProvider, GroqLLMProvider
+from .providers.llm import BedrockLLMProvider, GeminiLLMProvider, GroqLLMProvider
 from .providers.repository import DynamoDBFactRepository, SQLiteFactRepository
 
 
@@ -28,9 +29,11 @@ def get_llm_provider() -> LLMProvider:
     provider = os.getenv("LLM_PROVIDER", "groq").lower()
     if provider == "groq":
         return GroqLLMProvider()
+    elif provider == "gemini":
+        return GeminiLLMProvider()
     elif provider == "bedrock":
         return BedrockLLMProvider()
-    raise ValueError(f"Unknown LLM_PROVIDER: {provider}. Supported: ['groq', 'bedrock']")
+    raise ValueError(f"Unknown LLM_PROVIDER: {provider}. Supported: ['groq', 'gemini', 'bedrock']")
 
 
 @lru_cache(maxsize=1)
@@ -38,11 +41,13 @@ def get_embedding_provider() -> EmbeddingProvider:
     provider = os.getenv("EMBEDDING_PROVIDER", "fastembed").lower()
     if provider == "fastembed":
         return FastEmbedProvider()
+    elif provider == "gemini":
+        return GeminiEmbeddingProvider()
     elif provider == "bedrock":
         return BedrockEmbeddingProvider()
     elif provider == "hashed":
         return HashedEmbeddingProvider()
-    raise ValueError(f"Unknown EMBEDDING_PROVIDER: {provider}. Supported: ['fastembed', 'bedrock', 'hashed']")
+    raise ValueError(f"Unknown EMBEDDING_PROVIDER: {provider}. Supported: ['fastembed', 'gemini', 'bedrock', 'hashed']")
 
 
 _INGESTORS: dict[str, Ingestor] = {
