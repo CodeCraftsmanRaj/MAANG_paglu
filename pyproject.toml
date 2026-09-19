@@ -1,0 +1,12 @@
+[project]
+name = "maang-paglu"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "fastapi>=0.110",
+    "httpx>=0.27",
+    "uvicorn>=0.29",
+]
