@@ -1,8 +1,8 @@
 name: Build Desktop Apps (EXE, DMG, AppImage)
 
 on:
-  push:
-    branches: [ "main" ] # Runs ONLY on the main branch
+  # push:
+  #   branches: [ "main" ] # Runs ONLY on the main branch
   workflow_dispatch: 
 
 jobs:
