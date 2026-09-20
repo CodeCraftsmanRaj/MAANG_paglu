@@ -10,7 +10,10 @@
     "dev": "vite",
     "build": "vite build",
     "desktop": "electron .",
-    "dist": "electron-builder --linux"
+    "dist": "electron-builder --linux",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
   },
   "build": {
     "appId": "com.contextforge.ui",
@@ -18,9 +21,17 @@
     "files": [
       "electron/**",
       "package.json"
-    ],    "linux": {
+    ],
+    "linux": {
       "target": ["AppImage"],
       "category": "Utility"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": ["nsis"]
     }
   },
   "dependencies": {
