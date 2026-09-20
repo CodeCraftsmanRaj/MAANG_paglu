@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ContextForge backend: FastAPI on AWS Lambda (Mangum) behind an API Gateway HTTP API,
+  with Amazon DynamoDB (single table) and Amazon Bedrock (Claude + Titan embeddings).
+  Built for the First Commit hackathon — Bharat Builds Tour (Ship It track).
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: >
+      Bedrock model for fact extraction, project classification, and cited answers.
+      Default is Claude Haiku 4.5 via the US cross-region inference profile (cheap,
+      vision-capable). Claude 3.5 Sonnet also works: us.anthropic.claude-3-5-sonnet-20241022-v1:0.
+      Anthropic model access must be enabled once in the Bedrock console for the account.
+  BedrockEmbeddingModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+    Description: >
+      Bedrock embedding model. Amazon-owned models (Titan) are enabled by default
+      on every account, so this works out of the box.
+  GroqApiKey:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: "Optional. Only used if you switch LLM_PROVIDER to groq in the Lambda console."
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [x86_64]
+    MemorySize: 1024
+    Timeout: 120
+
+Resources:
+  KnowledgeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-knowledge"
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - { Key: app, Value: contextforge }
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: "$default"
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowMethods: ["*"]
+        AllowHeaders: ["*"]
+        AllowCredentials: false
+        MaxAge: 600
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-api"
+      Description: ContextForge FastAPI app behind the Mangum ASGI adapter
+      CodeUri: ../backend/lambda-build
+      Handler: lambda_handler.handler
+      Environment:
+        Variables:
+          DB_PROVIDER: dynamodb
+          DYNAMODB_TABLE_NAME: !Ref KnowledgeTable
+          LLM_PROVIDER: bedrock
+          EMBEDDING_PROVIDER: bedrock
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          BEDROCK_EMBEDDING_MODEL_ID: !Ref BedrockEmbeddingModelId
+          GROQ_API_KEY: !Ref GroqApiKey
+          # NOTE: AWS_REGION is reserved — Lambda injects it automatically (equals the
+          # function's region), and the app reads it via os.getenv("AWS_REGION").
+          PYTHONUNBUFFERED: "1"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref KnowledgeTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+              Resource:
+                - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/*"
+                - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+                - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:application-inference-profile/*"
+      Events:
+        ApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /
+            Method: ANY
+        ApiProxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+
+  # Function URL as a direct, uncapped alternative entry point to the same Lambda
+  # (API Gateway caps integrations at ~29 s; the Function URL allows up to 120 s).
+  # Declared explicitly (instead of FunctionUrlConfig) so the URL output reference is deterministic.
+  ContextForgeFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt ApiFunction.Arn
+      AuthType: NONE
+      Cors:
+        AllowOrigins: ["*"]
+        AllowMethods: ["*"]
+        AllowHeaders: ["*"]
+        MaxAge: 600
+
+  ContextForgeFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+Outputs:
+  ApiUrl:
+    Description: Public ContextForge API URL (API Gateway HTTP API, $default stage — no suffix)
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  FunctionUrl:
+    Description: Direct Lambda Function URL (no API Gateway 29s cap — use for very long URL ingests)
+    Value: !GetAtt ContextForgeFunctionUrl.FunctionUrl
+  TableName:
+    Description: DynamoDB single-table name
+    Value: !Ref KnowledgeTable
+  Region:
+    Value: !Ref AWS::Region
