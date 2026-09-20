@@ -2,8 +2,8 @@ name: Build Desktop Apps (EXE, DMG, AppImage)
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch: # Allows manual trigger from the GitHub Actions tab
+    branches: [ "**" ] # Runs on ALL branches now
+  workflow_dispatch: 
 
 jobs:
   build-desktop:
@@ -43,7 +43,6 @@ jobs:
         run: ${{ matrix.build_cmd }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Prevents build failure on macOS if it attempts automatic codesigning without certs
           CSC_IDENTITY_AUTO_DISCOVERY: false 
 
       - name: Upload Build Artifacts
