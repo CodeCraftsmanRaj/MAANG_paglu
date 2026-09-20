@@ -6,16 +6,24 @@
   "main": "electron/main.cjs",
   "author": { "name": "ContextForge Team", "email": "team@contextforge.dev" },
   "homepage": "http://contextforge-ui-271740378665.s3-website.us-east-1.amazonaws.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CodeCraftsmanRaj/MAANG_paglu"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "desktop": "electron .",
-    "dist": "electron-builder --linux"
+    "dist": "vite build && electron-builder --linux --publish never",
+    "dist:linux": "vite build && electron-builder --linux --publish never",
+    "dist:mac": "vite build && electron-builder --mac --publish never",
+    "dist:win": "vite build && electron-builder --win --publish never"
   },
   "build": {
     "appId": "com.contextforge.ui",
     "productName": "ContextForge",
     "files": [
+      "dist/**",
       "electron/**",
       "package.json"
     ],
@@ -40,8 +48,5 @@
     "electron": "^31.0.0",
     "electron-builder": "^26.15.3",
     "vite": "^5.4.0"
-  },
-  "overrides": {
-    "@noble/hashes": "1.1.2"
   }
 }
