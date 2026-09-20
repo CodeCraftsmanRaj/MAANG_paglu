@@ -817,10 +817,12 @@ function FactCard({ fact, currentProject }) {
 
 function ScreenWatch({ log, currentProject, disabled = false }) {
   const [on, setOn] = useState(false);
-  const ref = useRef({});
+  const ref = useRef({ lastSignature: "", busy: false });
   const stop = () => {
     clearInterval(ref.current.timer);
     ref.current.stream?.getTracks().forEach((t) => t.stop());
+    ref.current.lastSignature = "";
+    ref.current.busy = false;
     setOn(false);
   };
   useEffect(() => stop, []);
@@ -837,16 +839,37 @@ function ScreenWatch({ log, currentProject, disabled = false }) {
       await v.play();
       const c = document.createElement("canvas");
       const tick = async () => {
+        if (ref.current.busy || !v.videoWidth || !v.videoHeight) return;
         const w = Math.min(1600, v.videoWidth);
         c.width = w;
         c.height = (w * v.videoHeight) / v.videoWidth;
-        c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+        const ctx = c.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        const sample = document.createElement("canvas");
+        sample.width = 32;
+        sample.height = 18;
+        const sampleCtx = sample.getContext("2d");
+        sampleCtx.drawImage(c, 0, 0, sample.width, sample.height);
+        const pixels = sampleCtx.getImageData(0, 0, sample.width, sample.height).data;
+        let signature = "";
+        for (let i = 0; i < pixels.length; i += 16) signature += pixels[i].toString(16).padStart(2, "0");
+        if (signature === ref.current.lastSignature) {
+          log("screen unchanged; OCR skipped");
+          return;
+        }
+        ref.current.busy = true;
         try {
-          const r = await call(`/sessions/${source_id}/screen`, "POST", { image: c.toDataURL("image/jpeg", 0.7).split(",")[1] });
+          const r = await call(`/sessions/${source_id}/screen`, "POST", { image: c.toDataURL("image/jpeg", 0.55).split(",")[1] });
+          ref.current.lastSignature = signature;
           log(r.skipped ? "screen unchanged" : `extracted ${r.facts} facts from screen`);
-        } catch (e) { log(e.message, true); }
+        } catch (e) {
+          log(e.message, true);
+        } finally {
+          ref.current.busy = false;
+        }
       };
-      ref.current = { stream, timer: setInterval(tick, 20000) };
+      ref.current.stream = stream;
+      ref.current.timer = setInterval(tick, 20000);
       stream.getVideoTracks()[0].onended = stop;
       setOn(true);
       tick();
@@ -973,8 +996,11 @@ function Capture({ log, logs, tagsData, currentProject, disabled = false }) {
       <div className="grid">
         <div className={`card secondary ${disabled ? "roster-disabled" : ""}`}>
           <h3>Browser extension intake</h3>
-          <p className="sub">Load <code>extension/</code> in Chrome and paste your bearer token into <code>background.js</code> to record AI chat sessions and GitHub docs.</p>
-          <button disabled={disabled} onClick={() => navigator.clipboard.writeText(store.token)}>Copy session token</button>
+          <p className="sub">Load <code>extension/</code> in Chrome, then configure the token and active project in Extension options.</p>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            <button disabled={disabled} onClick={() => navigator.clipboard.writeText(store.token)}>Copy session token</button>
+            <button disabled={disabled} onClick={() => navigator.clipboard.writeText(currentProject?.id || "proj_default")}>Copy project ID</button>
+          </div>
         </div>
         <div className={`card secondary ${disabled ? "roster-disabled" : ""}`}>
           <h3>Local folder poller</h3>

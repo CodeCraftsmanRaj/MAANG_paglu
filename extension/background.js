@@ -1,10 +1,17 @@
 const API = "http://127.0.0.1:8000";
-const TOKEN = "PASTE_YOUR_TOKEN_FROM_THE_CAPTURE_TAB"; // ContextForge > Capture > Browser extension
 
 chrome.runtime.onMessage.addListener((msg) => {
-  fetch(API + "/api/capture/page", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer " + TOKEN },
-    body: JSON.stringify(msg),
-  }).catch((e) => console.warn("ContextForge:", e));
+  chrome.storage.local.get({ token: "", projectId: "proj_default" }, ({ token, projectId }) => {
+    if (!token) {
+      console.warn("ContextForge: configure the token in the extension options");
+      return;
+    }
+    fetch(API + "/api/capture/page", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ ...msg, project_id: projectId }),
+    }).then((response) => {
+      if (!response.ok) throw new Error(`capture failed (${response.status})`);
+    }).catch((e) => console.warn("ContextForge:", e));
+  });
 });

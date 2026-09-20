@@ -3,10 +3,12 @@
   "name": "ContextForge Capture",
   "version": "0.1.0",
   "description": "Sends the page you are reading (AI chats, docs, tickets) to your ContextForge.",
-  "host_permissions": ["http://127.0.0.1:8000/*"],
+  "host_permissions": ["http://127.0.0.1:8000/*", "http://localhost:8000/*"],
+  "permissions": ["storage"],
   "background": { "service_worker": "background.js" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
   "content_scripts": [{
-    "matches": ["https://chatgpt.com/*", "https://claude.ai/*", "https://gemini.google.com/*", "https://github.com/*", "https://*.notion.so/*"],
+    "matches": ["https://chatgpt.com/*", "https://claude.ai/*", "https://gemini.google.com/*", "https://github.com/*", "https://*.notion.so/*", "https://docs.google.com/document/*", "https://meet.google.com/*"],
     "js": ["content.js"]
   }]
 }
