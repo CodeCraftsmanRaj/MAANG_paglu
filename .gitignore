@@ -79,3 +79,18 @@ Thumbs.db
 *.swo
 backend/uv.lock 
 frontend/package-lock.json 
+
+# Demo Scripts, Recordings & Presentation Scratch
+video-demo-script.md
+video-demo-script*
+*demo-script*
+*.mp4
+*.webm
+*.mov
+*.mkv
+*.avi
+*.mp3
+*.wav
+recordings/
+demo/
+scratch/
