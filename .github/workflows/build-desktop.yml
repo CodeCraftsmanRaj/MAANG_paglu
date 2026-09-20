@@ -1,0 +1,54 @@
+name: Build Desktop Apps (EXE, DMG, AppImage)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Allows manual trigger from the GitHub Actions tab
+
+jobs:
+  build-desktop:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            build_cmd: npm run dist:win
+            artifact_name: ContextForge-Windows-EXE
+            artifact_path: frontend/dist/*.exe
+          - os: macos-latest
+            build_cmd: npm run dist:mac
+            artifact_name: ContextForge-macOS-DMG
+            artifact_path: frontend/dist/*.dmg
+          - os: ubuntu-latest
+            build_cmd: npm run dist:linux
+            artifact_name: ContextForge-Linux-AppImage
+            artifact_path: frontend/dist/*.AppImage
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install Dependencies
+        working-directory: ./frontend
+        run: npm install
+
+      - name: Build Electron App
+        working-directory: ./frontend
+        run: ${{ matrix.build_cmd }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prevents build failure on macOS if it attempts automatic codesigning without certs
+          CSC_IDENTITY_AUTO_DISCOVERY: false 
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          retention-days: 7
