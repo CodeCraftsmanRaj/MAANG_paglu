@@ -1,9 +1,13 @@
-"""Real auth: salted PBKDF2 passwords, bearer tokens, roles. First account is admin. Admins may preview other roles."""
+"""Real auth: salted PBKDF2 passwords, bearer tokens, roles. First account is admin. Admins may preview other roles.
+
+Storage goes through the active FactRepository (SQLite locally, DynamoDB on AWS), so the
+same code runs on a laptop and on Lambda with no local database file.
+"""
 import hashlib, hmac, json, secrets
 
 from fastapi import Depends, Header, HTTPException
 
-from .db import rows, run
+from .factory import get_fact_repository
 
 
 def _hash(pw, salt): return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 120_000).hex()
@@ -11,43 +15,44 @@ def _hash(pw, salt): return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 120
 
 def _issue(user, role):
     tok = secrets.token_urlsafe(32)
-    run("INSERT INTO tokens VALUES(?,?)", (tok, user))
+    get_fact_repository().create_token(tok, user)
     return {"token": tok, "user": user, "role": role}
 
 
 def register(user, pw):
+    repo = get_fact_repository()
     if not user or len(pw) < 6:
         raise HTTPException(422, "Pick a username and a password of at least 6 characters")
-    if rows("SELECT 1 FROM users WHERE username=?", (user,)):
+    if repo.get_user(user):
         raise HTTPException(409, "That username is taken")
-    role = "member" if rows("SELECT 1 FROM users LIMIT 1") else "admin"
+    role = "member" if repo.has_any_user() else "admin"
     salt = secrets.token_bytes(16)
-    run("INSERT INTO users VALUES(?,?,?)", (user, salt.hex() + "$" + _hash(pw, salt), role))
+    repo.create_user(user, salt.hex() + "$" + _hash(pw, salt), role)
     return _issue(user, role)
 
 
 def login(user, pw):
-    r = rows("SELECT pw, role FROM users WHERE username=?", (user,))
+    r = get_fact_repository().get_user(user)
     if r:
-        salt, h = r[0]["pw"].split("$")
+        salt, h = r["pw"].split("$")
         if hmac.compare_digest(h, _hash(pw, bytes.fromhex(salt))):
-            return _issue(user, r[0]["role"])
+            return _issue(user, r["role"])
     raise HTTPException(401, "Wrong username or password")
 
 
 def current(authorization: str = Header(""), x_view_as: str = Header("")):
-    u = rows("SELECT u.username, u.role FROM tokens t JOIN users u ON u.username=t.username WHERE t.token=?",
-             (authorization.removeprefix("Bearer ").strip(),))
+    repo = get_fact_repository()
+    u = repo.get_token_user(authorization.removeprefix("Bearer ").strip())
     if not u:
         raise HTTPException(401, "Sign in required")
-    user, role = u[0]["username"], u[0]["role"]
+    user, role = u["username"], u["role"]
     view = x_view_as or role
     if view != role and role != "admin":
         raise HTTPException(403, "Only admins can preview other roles")
-    r = rows("SELECT tags FROM roles WHERE name=?", (view,))
-    if not r:
+    tags = repo.get_role_tags(view)
+    if tags is None:
         raise HTTPException(403, f"Unknown role '{view}'")
-    return {"user": user, "role": role, "view": view, "allowed": json.loads(r[0]["tags"])}
+    return {"user": user, "role": role, "view": view, "allowed": tags}
 
 
 def require_admin(c=Depends(current)):
@@ -109,4 +114,3 @@ def can_access_project(user: str, role: str, project: dict | None) -> bool:
     if "*" in members or user in members or role in members:
         return True
     return False
-

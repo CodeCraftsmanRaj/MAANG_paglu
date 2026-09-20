@@ -59,6 +59,13 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# AWS deployment artifacts (Lambda package staging + deploy tools)
+backend/lambda-build/
+infra/.aws-sam/
+infra/.build-venv/
+infra/packaged.yaml
+infra/samconfig.toml
+
 # Model & Local Caches
 .cache/
 fastembed_cache/

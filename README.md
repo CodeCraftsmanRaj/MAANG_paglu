@@ -30,6 +30,10 @@ cd backend
 cp .env.local .env           # or copy .env.example (Groq + FastEmbed + SQLite)
 uv add -r requirements.txt
 uv run main.py               # http://127.0.0.1:8000 (docs at /docs)
+
+# tests (the DynamoDB parity suite needs moto)
+uv add --dev moto
+uv run python -m unittest discover -s . -p "test_*.py"
 ```
 
 **Frontend** (Node 18+)
@@ -42,8 +46,20 @@ npm run desktop              # optional Electron window (run `npm run dev` first
 
 ---
 
-## Deploying on AWS (Bedrock + DynamoDB + Lambda)
-To switch to AWS cloud services, set your `.env` to match `.env.production`:
+## Deploying on AWS (Ship It track)
+
+One command deploys the whole backend — **API Gateway → Lambda (FastAPI/Mangum) → DynamoDB (single table) + Bedrock (Claude LLM, Titan embeddings)** — all pay-per-use, free-tier friendly, with a public HTTPS URL as the output:
+
+```bash
+cd infra
+./deploy.sh contextforge     # then: ./smoke_test.sh <ApiUrl>
+```
+
+The stack provisions the DynamoDB table, the Lambda function (slim package, no fastembed — Bedrock does embeddings), IAM roles, an HTTP API with CORS, and a Lambda Function URL (no 29 s API Gateway cap) as an escape hatch for very long ingests. Auth (users, tokens, roles) lives in DynamoDB on AWS and in SQLite locally — same code, selected by `DB_PROVIDER`.
+
+Full guide (prerequisites, Bedrock model access, smoke test, teardown, costs, troubleshooting): **[infra/README.md](infra/README.md)**.
+
+To run the backend against cloud services *without* Lambda (e.g. `uvicorn` on a box with AWS credentials), set:
 
 ```env
 LLM_PROVIDER=bedrock
@@ -51,16 +67,10 @@ EMBEDDING_PROVIDER=bedrock
 DB_PROVIDER=dynamodb
 
 AWS_REGION=us-east-1
-BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20240620-v1:0
-BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v1
-DYNAMODB_TABLE_NAME=ContextForgeKnowledge
+BEDROCK_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0   # cheap default; Sonnet: us.anthropic.claude-3-5-sonnet-20241022-v1:0
+BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
+DYNAMODB_TABLE_NAME=<your table>
 ```
-
-### Serverless Lambda Deployment
-Wrap with Mangum via `backend/lambda_handler.py`:
-- Handler: `lambda_handler.handler`
-- Runtime: `python3.11`
-- Attach IAM permissions for `bedrock:InvokeModel` and `dynamodb:*` on your table.
 
 ---
 

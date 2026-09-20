@@ -1,5 +1,4 @@
 import hashlib
-import json
 import os
 from dotenv import load_dotenv
 
@@ -12,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .auth import can_access_project, current, is_visible, login, register, require_admin
-from .db import rows, run
 from .factory import get_fact_repository, get_ingestor, get_llm_provider
 from .ingestion import INGESTORS, normalize, watch
 from .strategies import get_strategy
@@ -29,6 +27,20 @@ app = FastAPI(title="ContextForge")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 ALL = list(STORES)
 _seen: dict = {}
+
+
+def _known_tags(repo=None) -> set[str]:
+    """Union of the static taxonomy, all role tags, and all fact tags (used for role-tag validation)."""
+    repo = repo or get_fact_repository()
+    known = set(TAXONOMY.keys()) | {"general"}
+    for r in repo.list_roles():
+        for t in r.get("tags", []):
+            if t and t != "*":
+                known.add(t)
+    for t in repo.all_fact_tags():
+        if t and t != "*":
+            known.add(t)
+    return known
 
 
 class AuthIn(BaseModel):
@@ -247,10 +259,9 @@ def get_rejected_facts(c=Depends(current)):
 @app.get("/api/sources/{source_id}")
 def get_source_detail(source_id: str, c=Depends(current)):
     repo = get_fact_repository()
-    r = rows("SELECT s.*, p.name as project_name FROM sources s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?", (source_id,))
-    if not r:
+    src = repo.get_source_detail(source_id)
+    if not src:
         raise HTTPException(404, "Source not found")
-    src = dict(r[0])
 
     pid = src.get("project_id", "proj_default")
     proj = repo.get_project(pid)
@@ -296,35 +307,21 @@ def me(c=Depends(current)):
 
 @app.get("/api/roles")
 def roles(c=Depends(current)):
-    return [{"name": r["name"], "tags": json.loads(r["tags"])} for r in rows("SELECT * FROM roles ORDER BY name")]
+    return [{"name": r["name"], "tags": r["tags"]} for r in get_fact_repository().list_roles()]
 
 
 @app.post("/api/roles")
 def create_role(b: CreateRoleIn, c=Depends(require_admin)):
+    repo = get_fact_repository()
     name = b.name.strip().lower()
     if not name:
         raise HTTPException(422, "Role name is required")
     if name == "admin":
         raise HTTPException(400, "The admin role is reserved and cannot be created")
-    if rows("SELECT 1 FROM roles WHERE name=?", (name,)):
+    if repo.role_exists(name):
         raise HTTPException(409, f"Role '{name}' already exists")
 
-    known_tags = set(TAXONOMY.keys()) | {"general"}
-    for r in rows("SELECT tags FROM roles"):
-        try:
-            for t in json.loads(r["tags"]):
-                if t and t != "*":
-                    known_tags.add(t)
-        except Exception:
-            pass
-    for r in rows("SELECT tags FROM facts"):
-        try:
-            for t in json.loads(r["tags"]):
-                if t and t != "*":
-                    known_tags.add(t)
-        except Exception:
-            pass
-
+    known_tags = _known_tags(repo)
     unknown = [t for t in b.tags if t != "*" and t not in known_tags and t.split("/", 1)[0] not in known_tags]
     if unknown and not (b.allow_new or b.create_new_tag):
         raise HTTPException(
@@ -332,7 +329,7 @@ def create_role(b: CreateRoleIn, c=Depends(require_admin)):
             f"Unknown tags: {unknown}. Set allow_new=True (or create_new_tag=True) to register new tags intentionally.",
         )
 
-    run("INSERT INTO roles VALUES(?,?)", (name, json.dumps(b.tags)))
+    repo.upsert_role(name, b.tags)
     return {"ok": True, "name": name, "tags": b.tags}
 
 
@@ -342,22 +339,7 @@ def put_role(name: str, b: RoleIn, c=Depends(require_admin)):
         raise HTTPException(400, "The admin role cannot be changed")
 
     # Validate tags against known taxonomy unless explicitly allowed
-    known_tags = set(TAXONOMY.keys()) | {"general"}
-    for r in rows("SELECT tags FROM roles"):
-        try:
-            for t in json.loads(r["tags"]):
-                if t and t != "*":
-                    known_tags.add(t)
-        except Exception:
-            pass
-    for r in rows("SELECT tags FROM facts"):
-        try:
-            for t in json.loads(r["tags"]):
-                if t and t != "*":
-                    known_tags.add(t)
-        except Exception:
-            pass
-
+    known_tags = _known_tags()
     unknown = [t for t in b.tags if t != "*" and t not in known_tags and t.split("/", 1)[0] not in known_tags]
     if unknown and not (b.allow_new or b.create_new_tag):
         raise HTTPException(
@@ -365,43 +347,29 @@ def put_role(name: str, b: RoleIn, c=Depends(require_admin)):
             f"Unknown tags: {unknown}. Set allow_new=True (or create_new_tag=True) to register new tags intentionally.",
         )
 
-    run("INSERT OR REPLACE INTO roles VALUES(?,?)", (name, json.dumps(b.tags)))
+    get_fact_repository().upsert_role(name, b.tags)
     return {"ok": True}
 
 
 @app.get("/api/users")
 def users(c=Depends(require_admin)):
-    return rows("SELECT username, role FROM users ORDER BY username")
+    return get_fact_repository().list_users()
 
 
 @app.put("/api/users/{name}/role")
 def set_user_role(name: str, b: UserRoleIn, c=Depends(require_admin)):
     if name == c["user"]:
         raise HTTPException(400, "You cannot change your own role")
-    if not rows("SELECT 1 FROM roles WHERE name=?", (b.role,)):
+    repo = get_fact_repository()
+    if not repo.role_exists(b.role):
         raise HTTPException(404, "Unknown role")
-    run("UPDATE users SET role=? WHERE username=?", (b.role, name))
+    repo.update_user_role(name, b.role)
     return {"ok": True}
 
 
 @app.get("/api/tags")
 def tags(c=Depends(current)):
-    all_tags = set(TAXONOMY.keys()) | {"general"}
-    for r in rows("SELECT tags FROM roles"):
-        try:
-            for t in json.loads(r["tags"]):
-                if t and t != "*":
-                    all_tags.add(t)
-        except Exception:
-            pass
-
-    for r in rows("SELECT tags FROM facts"):
-        try:
-            for t in json.loads(r["tags"]):
-                if t and t != "*":
-                    all_tags.add(t)
-        except Exception:
-            pass
+    all_tags = _known_tags()
 
     tree: dict[str, list[str]] = {}
     for t in sorted(all_tags):
@@ -424,15 +392,6 @@ def tags(c=Depends(current)):
         "tags": all_sorted,
         **tree,
     }
-
-
-# ----- sources -----
-@app.get("/api/sources/{sid}")
-def get_source(sid: str, c=Depends(current)):
-    r = rows("SELECT id, kind, title, uri, mode, created, project_id FROM sources WHERE id=?", (sid,))
-    if not r:
-        raise HTTPException(404, "Source not found")
-    return r[0]
 
 
 # ----- ingestion (manual + automatic) -----
@@ -492,8 +451,7 @@ def chunk_in(sid: str, b: ChunkIn, c=Depends(require_admin)):
     live(sid)
     repo = get_fact_repository()
     # Check project type and mode from source
-    r = rows("SELECT project_id FROM sources WHERE id=?", (sid,))
-    pid = r[0]["project_id"] if r else "proj_default"
+    pid = get_fact_repository().get_source_project_id(sid) or "proj_default"
     proj = repo.get_project(pid)
     is_process = bool(proj and proj.get("project_type") == "process")
     structure_mode = proj.get("structure_mode", "rag") if proj else "rag"
@@ -514,8 +472,7 @@ def screen_in(sid: str, b: ShotIn, c=Depends(require_admin)):
     if len(text.strip()) < 25 or not fresh(sid, text):
         return {"facts": 0, "skipped": True}
     repo = get_fact_repository()
-    r = rows("SELECT project_id FROM sources WHERE id=?", (sid,))
-    pid = r[0]["project_id"] if r else "proj_default"
+    pid = get_fact_repository().get_source_project_id(sid) or "proj_default"
     proj = repo.get_project(pid)
     is_process = bool(proj and proj.get("project_type") == "process")
     structure_mode = proj.get("structure_mode", "rag") if proj else "rag"

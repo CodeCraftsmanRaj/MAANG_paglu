@@ -3,7 +3,12 @@
   "name": "ContextForge Capture",
   "version": "0.1.0",
   "description": "Sends the page you are reading (AI chats, docs, tickets) to your ContextForge.",
-  "host_permissions": ["http://127.0.0.1:8000/*", "http://localhost:8000/*"],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "https://*.execute-api.*.amazonaws.com/*",
+    "https://*.lambda-url.*.on.aws/*"
+  ],
   "permissions": ["storage"],
   "background": { "service_worker": "background.js" },
   "options_ui": { "page": "options.html", "open_in_tab": true },

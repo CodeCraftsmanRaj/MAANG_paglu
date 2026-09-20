@@ -90,7 +90,8 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         self.region_name = region_name or os.getenv("AWS_REGION", "us-east-1")
         self.model_name = model_id or os.getenv("BEDROCK_EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v1")
         self.model_id = self.model_name
-        self.dimension = 1536
+        self.dimension = int(os.getenv("BEDROCK_EMBEDDING_DIM", "1536"))
+        self._dim_locked = False
 
         self._client = None
         self._fallback = HashedEmbeddingProvider(dim=self.dimension)
@@ -115,6 +116,12 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
                 )
                 res_data = json.loads(response["body"].read().decode("utf-8"))
                 v = np.asarray(res_data["embedding"], dtype=np.float32)
+                if not self._dim_locked and len(v) != self.dimension:
+                    # Trust the model's actual output dimension (e.g. Titan v2 = 1024, v1 = 1536)
+                    # and stay self-consistent for stored-vector metadata from this point on.
+                    self.dimension = int(len(v))
+                    self._dim_locked = True
+                    self._fallback = HashedEmbeddingProvider(dim=self.dimension)
                 norm = np.linalg.norm(v) + 1e-9
                 out.append(v / norm)
             except Exception as e:

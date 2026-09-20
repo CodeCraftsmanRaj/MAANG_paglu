@@ -219,4 +219,63 @@ class FactRepository(ABC):
         """Fetch all graph edges."""
         ...
 
+    # ----- accounts, tokens & roles (deployable backends must not rely on local SQLite) -----
+    # Default implementations raise NotImplementedError; SQLite and DynamoDB repositories override them.
+
+    def create_user(self, username: str, pw: str, role: str) -> None:
+        """Store a user with a pre-hashed password and an assigned role."""
+        raise NotImplementedError
+
+    def get_user(self, username: str) -> dict[str, Any] | None:
+        """Return {username, pw, role} for a user, or None."""
+        raise NotImplementedError
+
+    def has_any_user(self) -> bool:
+        """True if at least one user is registered (first user becomes admin)."""
+        raise NotImplementedError
+
+    def list_users(self) -> list[dict[str, Any]]:
+        """Return [{username, role}] for every registered user."""
+        raise NotImplementedError
+
+    def update_user_role(self, username: str, role: str) -> None:
+        """Assign a role to a user."""
+        raise NotImplementedError
+
+    def create_token(self, token: str, username: str) -> None:
+        """Issue a bearer token for a user."""
+        raise NotImplementedError
+
+    def get_token_user(self, token: str) -> dict[str, Any] | None:
+        """Resolve a bearer token to {username, role}, or None if invalid."""
+        raise NotImplementedError
+
+    def list_roles(self) -> list[dict[str, Any]]:
+        """Return [{name, tags(list[str])}] for every role, sorted by name."""
+        raise NotImplementedError
+
+    def get_role_tags(self, name: str) -> list[str] | None:
+        """Return the tag list for a role, or None if the role does not exist."""
+        raise NotImplementedError
+
+    def upsert_role(self, name: str, tags: list[str]) -> None:
+        """Create or replace a role and its tags."""
+        raise NotImplementedError
+
+    def role_exists(self, name: str) -> bool:
+        """True if the role name is registered."""
+        raise NotImplementedError
+
+    def all_fact_tags(self) -> set[str]:
+        """Union of tags across all facts (used for tag-taxonomy validation)."""
+        raise NotImplementedError
+
+    def get_source_detail(self, source_id: str) -> dict[str, Any] | None:
+        """Return a source row enriched with project_name, or None."""
+        raise NotImplementedError
+
+    def get_source_project_id(self, source_id: str) -> str | None:
+        """Return the project_id a source belongs to, or None."""
+        raise NotImplementedError
+
 

@@ -339,6 +339,73 @@ class TestDynamoDBRepositoryParityUnderMoto(unittest.TestCase):
         self.assertIn(fid1, vecs)
         np.testing.assert_allclose(vecs[fid1], vec, rtol=1e-5)
 
+    @mock_aws
+    def test_dynamodb_account_role_and_token_operations(self):
+        """Accounts, tokens, roles and source lookups must work on the single DynamoDB table (Lambda auth path)."""
+        dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+        table_name = "ContextForgeKnowledge"
+        dynamodb.create_table(
+            TableName=table_name,
+            KeySchema=[
+                {"AttributeName": "PK", "KeyType": "HASH"},
+                {"AttributeName": "SK", "KeyType": "RANGE"},
+            ],
+            AttributeDefinitions=[
+                {"AttributeName": "PK", "AttributeType": "S"},
+                {"AttributeName": "SK", "AttributeType": "S"},
+            ],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        repo = DynamoDBFactRepository(table_name=table_name, region_name="us-east-1")
+
+        # Default roles are seeded lazily on first table access
+        role_names = {r["name"] for r in repo.list_roles()}
+        self.assertIn("admin", role_names)
+        self.assertIn("member", role_names)
+        self.assertEqual(repo.get_role_tags("admin"), ["*"])
+
+        # First user becomes admin (register() logic relies on has_any_user)
+        self.assertFalse(repo.has_any_user())
+        repo.create_user("alice", "salt$hash1", "admin")
+        self.assertTrue(repo.has_any_user())
+        repo.create_user("bob", "salt$hash2", "member")
+
+        self.assertEqual(repo.get_user("alice"), {"username": "alice", "pw": "salt$hash1", "role": "admin"})
+        self.assertIsNone(repo.get_user("carol"))
+
+        users = repo.list_users()
+        self.assertEqual([u["username"] for u in users], ["alice", "bob"])
+
+        repo.update_user_role("bob", "backend")
+        self.assertEqual(repo.get_user("bob")["role"], "backend")
+
+        # Tokens resolve to the user's current role
+        repo.create_token("tok-alice", "alice")
+        self.assertEqual(repo.get_token_user("tok-alice"), {"username": "alice", "role": "admin"})
+        self.assertIsNone(repo.get_token_user("tok-missing"))
+
+        # Role CRUD
+        self.assertFalse(repo.role_exists("devs"))
+        repo.upsert_role("devs", ["frontend", "api"])
+        self.assertTrue(repo.role_exists("devs"))
+        self.assertEqual(repo.get_role_tags("devs"), ["frontend", "api"])
+        repo.upsert_role("devs", ["frontend"])
+        self.assertEqual(repo.get_role_tags("devs"), ["frontend"])
+
+        # Source detail + project lookup
+        proj = repo.create_project("Auth Proj", "alice", structure_mode="rag")
+        sid = repo.put_source("text", "Auth Doc", None, "static", project_id=proj["id"])
+        detail = repo.get_source_detail(sid)
+        self.assertEqual(detail["id"], sid)
+        self.assertEqual(detail["project_id"], proj["id"])
+        self.assertEqual(detail["project_name"], "Auth Proj")
+        self.assertEqual(repo.get_source_project_id(sid), proj["id"])
+        self.assertIsNone(repo.get_source_project_id("missing-src"))
+
+        # Fact tag aggregation (used for tag-taxonomy validation)
+        repo.put_fact(text="PORT=5432", tags=["database", "general"], source_id=sid, structures=["flat"])
+        self.assertIn("database", repo.all_fact_tags())
+
 
 class TestLatencyAndScaleBenchmark(unittest.TestCase):
     """P1.7: Measure real latency for loading and scoring 1,000 and 10,000 facts."""

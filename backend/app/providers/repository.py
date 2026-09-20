@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import logging
 import os
 import time
 import uuid
@@ -11,6 +12,8 @@ import numpy as np
 
 from ..db import rows, run
 from ..interfaces import FactRepository
+
+logger = logging.getLogger("contextforge.repository")
 
 
 class SQLiteFactRepository(FactRepository):
@@ -224,6 +227,65 @@ class SQLiteFactRepository(FactRepository):
     def get_all_edges(self) -> list[dict[str, Any]]:
         return rows("SELECT fact_id, a, b FROM edges")
 
+    # ----- accounts, tokens & roles (SQLite: same local tables as before) -----
+
+    def create_user(self, username: str, pw: str, role: str) -> None:
+        run("INSERT INTO users VALUES(?,?,?)", (username, pw, role))
+
+    def get_user(self, username: str) -> dict[str, Any] | None:
+        r = rows("SELECT username, pw, role FROM users WHERE username=?", (username,))
+        return r[0] if r else None
+
+    def has_any_user(self) -> bool:
+        return bool(rows("SELECT 1 FROM users LIMIT 1"))
+
+    def list_users(self) -> list[dict[str, Any]]:
+        return rows("SELECT username, role FROM users ORDER BY username")
+
+    def update_user_role(self, username: str, role: str) -> None:
+        run("UPDATE users SET role=? WHERE username=?", (role, username))
+
+    def create_token(self, token: str, username: str) -> None:
+        run("INSERT INTO tokens VALUES(?,?)", (token, username))
+
+    def get_token_user(self, token: str) -> dict[str, Any] | None:
+        u = rows("SELECT u.username, u.role FROM tokens t JOIN users u ON u.username=t.username WHERE t.token=?", (token,))
+        return {"username": u[0]["username"], "role": u[0]["role"]} if u else None
+
+    def list_roles(self) -> list[dict[str, Any]]:
+        return [{"name": r["name"], "tags": json.loads(r["tags"])} for r in rows("SELECT name, tags FROM roles ORDER BY name")]
+
+    def get_role_tags(self, name: str) -> list[str] | None:
+        r = rows("SELECT tags FROM roles WHERE name=?", (name,))
+        return json.loads(r[0]["tags"]) if r else None
+
+    def upsert_role(self, name: str, tags: list[str]) -> None:
+        run("INSERT OR REPLACE INTO roles VALUES(?,?)", (name, json.dumps(tags)))
+
+    def role_exists(self, name: str) -> bool:
+        return bool(rows("SELECT 1 FROM roles WHERE name=?", (name,)))
+
+    def all_fact_tags(self) -> set[str]:
+        out: set[str] = set()
+        for r in rows("SELECT tags FROM facts"):
+            try:
+                tags = json.loads(r["tags"]) if isinstance(r["tags"], str) else (r["tags"] or [])
+                out.update(t for t in tags if t)
+            except Exception:
+                pass
+        return out
+
+    def get_source_detail(self, source_id: str) -> dict[str, Any] | None:
+        r = rows(
+            "SELECT s.*, p.name as project_name FROM sources s LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?",
+            (source_id,),
+        )
+        return dict(r[0]) if r else None
+
+    def get_source_project_id(self, source_id: str) -> str | None:
+        r = rows("SELECT project_id FROM sources WHERE id=?", (source_id,))
+        return r[0]["project_id"] if r else None
+
 
 class DynamoDBFactRepository(FactRepository):
     """AWS DynamoDB single-table implementation for persistent sources, facts, vecs, relations, and rejected items.
@@ -238,8 +300,15 @@ class DynamoDBFactRepository(FactRepository):
       - Vector / Edges:  Stored directly as binary/JSON attributes on Fact Item
     """
 
+    DEFAULT_ROLES = (
+        ("admin", ["*"]),
+        ("backend", ["backend", "database", "deploy", "api"]),
+        ("frontend", ["frontend", "api", "design"]),
+        ("member", []),
+    )
+
     def __init__(self, table_name: str | None = None, region_name: str | None = None):
-        self.table_name = table_name or os.getenv("DYNAMODB_TABLE_NAME", "ContextForgeKnowledge")
+        self.table_name = table_name or os.getenv("DYNAMODB_TABLE_NAME") or os.getenv("DYNAMODB_TABLE") or "ContextForgeKnowledge"
         self.region_name = region_name or os.getenv("AWS_REGION", "us-east-1")
         self._table = None
 
@@ -248,7 +317,19 @@ class DynamoDBFactRepository(FactRepository):
             import boto3
             dynamodb = boto3.resource("dynamodb", region_name=self.region_name)
             self._table = dynamodb.Table(self.table_name)
+            self._ensure_default_roles()
         return self._table
+
+    def _ensure_default_roles(self) -> None:
+        """Idempotently seed the default roles so auth works on a fresh table (once per container)."""
+        try:
+            for name, tags in self.DEFAULT_ROLES:
+                self._table.put_item(
+                    Item={"PK": f"ROLE#{name}", "SK": "METADATA", "name": name, "tags": json.dumps(tags)},
+                    ConditionExpression="attribute_not_exists(PK)",
+                )
+        except Exception as e:  # best-effort: roles may already exist or be created by admins later
+            logger.warning(f"DynamoDB default-role seeding skipped: {e}")
 
     def _hash_text(self, text: str) -> str:
         return hashlib.md5(text.strip().encode()).hexdigest()
@@ -647,5 +728,169 @@ class DynamoDBFactRepository(FactRepository):
                 if len(r) == 3:
                     out.append({"fact_id": fid, "a": r[0], "b": r[2]})
         return out
+
+    # ----- accounts, tokens & roles (DynamoDB single-table: USER#/TOKEN#/ROLE# patterns) -----
+
+    def create_user(self, username: str, pw: str, role: str) -> None:
+        self._get_table().put_item(Item={
+            "PK": f"USER#{username}", "SK": "METADATA",
+            "username": username, "pw": pw, "role": role,
+        })
+
+    def get_user(self, username: str) -> dict[str, Any] | None:
+        res = self._get_table().get_item(Key={"PK": f"USER#{username}", "SK": "METADATA"})
+        item = res.get("Item")
+        if not item:
+            return None
+        return {"username": item.get("username", username), "pw": item.get("pw", ""), "role": item.get("role", "member")}
+
+    def has_any_user(self) -> bool:
+        table = self._get_table()
+        kwargs: dict[str, Any] = dict(
+            FilterExpression="begins_with(PK, :p)",
+            ExpressionAttributeValues={":p": "USER#"},
+            ProjectionExpression="PK",
+        )
+        while True:
+            res = table.scan(**kwargs)
+            if res.get("Items"):
+                return True
+            lek = res.get("LastEvaluatedKey")
+            if not lek:
+                return False
+            kwargs["ExclusiveStartKey"] = lek
+
+    def list_users(self) -> list[dict[str, Any]]:
+        res = self._get_table().scan(
+            FilterExpression="begins_with(PK, :p)",
+            ExpressionAttributeValues={":p": "USER#"},
+            ProjectionExpression="#u, #r",
+            ExpressionAttributeNames={"#u": "username", "#r": "role"},
+        )
+        users = [{"username": i.get("username"), "role": i.get("role", "member")} for i in res.get("Items", [])]
+        users.sort(key=lambda u: u.get("username") or "")
+        return users
+
+    def update_user_role(self, username: str, role: str) -> None:
+        self._get_table().update_item(
+            Key={"PK": f"USER#{username}", "SK": "METADATA"},
+            UpdateExpression="SET #r = :r",
+            ExpressionAttributeNames={"#r": "role"},
+            ExpressionAttributeValues={":r": role},
+        )
+
+    def create_token(self, token: str, username: str) -> None:
+        # 30-day sessions; the table's TTL attribute cleans expired tokens up automatically
+        self._get_table().put_item(Item={
+            "PK": f"TOKEN#{token}", "SK": "METADATA",
+            "username": username,
+            "ttl": int(time.time()) + 60 * 60 * 24 * 30,
+        })
+
+    def get_token_user(self, token: str) -> dict[str, Any] | None:
+        table = self._get_table()
+        res = table.get_item(Key={"PK": f"TOKEN#{token}", "SK": "METADATA"})
+        tok_item = res.get("Item")
+        if not tok_item:
+            return None
+        username = tok_item.get("username")
+        if not username:
+            return None
+        u = self.get_user(username)
+        if not u:
+            return None
+        return {"username": username, "role": u["role"]}
+
+    def list_roles(self) -> list[dict[str, Any]]:
+        res = self._get_table().scan(
+            FilterExpression="begins_with(PK, :p)",
+            ExpressionAttributeValues={":p": "ROLE#"},
+            ProjectionExpression="#n, tags",
+            ExpressionAttributeNames={"#n": "name"},
+        )
+        roles = []
+        for i in res.get("Items", []):
+            raw = i.get("tags", "[]")
+            try:
+                tags = json.loads(raw) if isinstance(raw, str) else list(raw or [])
+            except Exception:
+                tags = []
+            roles.append({"name": i.get("name"), "tags": tags})
+        roles.sort(key=lambda r: r.get("name") or "")
+        return roles
+
+    def get_role_tags(self, name: str) -> list[str] | None:
+        res = self._get_table().get_item(Key={"PK": f"ROLE#{name}", "SK": "METADATA"})
+        item = res.get("Item")
+        if not item:
+            return None
+        raw = item.get("tags", "[]")
+        try:
+            return json.loads(raw) if isinstance(raw, str) else list(raw or [])
+        except Exception:
+            return []
+
+    def upsert_role(self, name: str, tags: list[str]) -> None:
+        self._get_table().put_item(Item={
+            "PK": f"ROLE#{name}", "SK": "METADATA",
+            "name": name, "tags": json.dumps(tags),
+        })
+
+    def role_exists(self, name: str) -> bool:
+        res = self._get_table().get_item(
+            Key={"PK": f"ROLE#{name}", "SK": "METADATA"},
+            ProjectionExpression="PK",
+        )
+        return bool(res.get("Item"))
+
+    def all_fact_tags(self) -> set[str]:
+        table = self._get_table()
+        out: set[str] = set()
+        kwargs: dict[str, Any] = dict(
+            FilterExpression="begins_with(PK, :p)",
+            ExpressionAttributeValues={":p": "FACT#"},
+            ProjectionExpression="tags",
+        )
+        while True:
+            res = table.scan(**kwargs)
+            for item in res.get("Items", []):
+                raw = item.get("tags", "[]")
+                try:
+                    tags = json.loads(raw) if isinstance(raw, str) else (raw or [])
+                    out.update(t for t in tags if t)
+                except Exception:
+                    pass
+            lek = res.get("LastEvaluatedKey")
+            if not lek:
+                return out
+            kwargs["ExclusiveStartKey"] = lek
+
+    def get_source_detail(self, source_id: str) -> dict[str, Any] | None:
+        table = self._get_table()
+        res = table.get_item(Key={"PK": f"SOURCE#{source_id}", "SK": "METADATA"})
+        src = res.get("Item")
+        if not src:
+            return None
+        proj_id = src.get("project_id", "proj_default")
+        pres = table.get_item(Key={"PK": f"PROJECT#{proj_id}", "SK": "METADATA"})
+        proj_name = pres.get("Item", {}).get("name")
+        return {
+            "id": src.get("id", source_id),
+            "kind": src.get("kind"),
+            "title": src.get("title"),
+            "uri": src.get("uri") or None,
+            "mode": src.get("mode"),
+            "created": float(src.get("created")) if src.get("created") else None,
+            "project_id": proj_id,
+            "project_name": proj_name,
+        }
+
+    def get_source_project_id(self, source_id: str) -> str | None:
+        res = self._get_table().get_item(
+            Key={"PK": f"SOURCE#{source_id}", "SK": "METADATA"},
+            ProjectionExpression="project_id",
+        )
+        item = res.get("Item")
+        return item.get("project_id") if item else None
 
 
