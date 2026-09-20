@@ -1,8 +1,8 @@
 name: Build Desktop Apps (EXE, DMG, AppImage)
 
 on:
-  # push:
-  #   branches: [ "main" ] # Runs ONLY on the main branch
+  push:
+    branches: [ "main" ] # Runs ONLY on the main branch
   workflow_dispatch: 
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install Dependencies
         working-directory: ./frontend
